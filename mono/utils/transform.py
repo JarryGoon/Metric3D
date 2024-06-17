@@ -8,6 +8,7 @@ import torch
 
 import matplotlib
 import matplotlib.cm
+import matplotlib.pyplot
 
 
 """
@@ -401,8 +402,9 @@ def gray_to_colormap(img, cmap='rainbow'):
     mask_invalid = img < 1e-10
     img = img / (img.max() + 1e-8)
     norm = matplotlib.colors.Normalize(vmin=0, vmax=1.1)
-    cmap_m = matplotlib.cm.get_cmap(cmap)
+    cmap_m = matplotlib.pyplot.get_cmap(cmap)
     map = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap_m)
     colormap = (map.to_rgba(img)[:, :, :3] * 255).astype(np.uint8)
     colormap[mask_invalid] = 0
+    
     return colormap
