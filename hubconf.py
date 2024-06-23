@@ -2,7 +2,11 @@ dependencies = ['torch', 'torchvision']
 
 import os
 import torch
-
+from ultralytics import YOLO
+# import cv2 as cv
+import pygame
+import time
+from enum import Enum
 import numpy as np
 
 try:
@@ -201,36 +205,95 @@ def metric3d(model: torch.nn.Module, rgb_origin: np.ndarray) -> np.ndarray:
     pred_depth = torch.clamp(pred_depth, 0, 300)
     
     #### normal are also available
-    if 'prediction_normal' in output_dict:  # only available for Metric3Dv2, i.e. vit model
-        pred_normal = output_dict['prediction_normal'][:, :3, :, :]
-        normal_confidence = output_dict['prediction_normal'][:, 3, :, :]  # see https://arxiv.org/abs/2109.09881 for details
-        # un pad and resize to some size if needed
-        pred_normal = pred_normal.squeeze()
-        pred_normal = pred_normal[:, pad_info[0]: pred_normal.shape[1] - pad_info[1],
+    # if 'prediction_normal' in output_dict:  # only available for Metric3Dv2, i.e. vit model
+    pred_normal = output_dict['prediction_normal'][:, :3, :, :]
+    #     normal_confidence = output_dict['prediction_normal'][:, 3, :, :]  # see https://arxiv.org/abs/2109.09881 for details
+    #     # un pad and resize to some size if needed
+    pred_normal = pred_normal.squeeze()
+    pred_normal = pred_normal[:, pad_info[0]: pred_normal.shape[1] - pad_info[1],
                       pad_info[2]: pred_normal.shape[2] - pad_info[3]]
-        # you can now do anything with the normal
-        # such as visualize pred_normal
-        pred_normal_vis = pred_normal.cpu().numpy().transpose((1, 2, 0))
-        pred_normal_vis = (pred_normal_vis + 1) / 2
-        cv2.imshow('normal_vis.png', (pred_normal_vis * 255).astype(np.uint8))
+    #     # you can now do anything with the normal
+    #     # such as visualize pred_normal
+    pred_normal_vis = pred_normal.cpu().numpy().transpose((1, 2, 0))
+    pred_normal_vis = (pred_normal_vis + 1) / 2
+    cv2.imshow('normal_vis.png', (pred_normal_vis * 255).astype(np.uint8))
         
     return pred_depth.cpu().numpy()
+
+play_list = (("mixkit-arcade-chiptune-explosion-1691.wav"),
+             ("mixkit-police-siren-1641.wav"))
+
+class Status(Enum):
+    NOK = 0
+    YOK = 1
+    FAR = 2
+    CLOSE = 3
+
+CLASS_NORTH_KOREAN = 77
+CLASS_PERSON = 0
+CLASS_BICYCLE = 1
+CLASS_CAR = 2
+CLASS_MOTORCYCLE = 3
+CLASSES = [CLASS_PERSON, CLASS_BICYCLE, CLASS_CAR, CLASS_MOTORCYCLE, CLASS_NORTH_KOREAN]
 
 
 if __name__ == '__main__':
     import cv2
     import numpy as np
-    
+
+    DISTANCE_THRESHOLD = 2.0
+    pygame.init()
+    model_detect = YOLO('yolov8s.pt')
+
+    explosion_sound = pygame.mixer.Sound(play_list[0])
+    siren_sound = pygame.mixer.Sound(play_list[1])
+
     cap = cv2.VideoCapture(0)
     
     ret, frame = cap.read()
-    
+    status_flag = Status.NOK
     model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_small', pretrain=True)
     
     while ret:
         depth = metric3d(model, frame)
-        
-        if cv2.waitKey(1) == 27:
+        frame_detect = frame
+        result_detect = model_detect.predict(frame,classes=CLASSES,half=True)
+
+        cv2.imshow("Pure Frame", result_detect[0].plot())
+        class_cpu = result_detect[0].boxes.cls.detach().cpu().numpy()
+        bbox_coords_cpu = result_detect[0].boxes.xyxy.to('cpu').numpy()
+
+        for bbox_idx in range(len(bbox_coords_cpu)):
+            bbox = bbox_coords_cpu[bbox_idx]
+            # If there is a vehicle in the image, the control department should give a warning(Siren)
+            if class_cpu[bbox_idx] in CLASSES[1:3]:
+                status_flag = Status.FAR
+            elif class_cpu[bbox_idx] == CLASS_NORTH_KOREAN:
+                print('North Korean invaded!')
+                middle_point = (int((bbox[1] + bbox[3]) / 2),int((bbox[0] + bbox[2]) / 2))
+                depth_middle = depth[middle_point]
+                if(depth_middle>DISTANCE_THRESHOLD):
+                    status_flag = Status.FAR
+                else:
+                    status_flag = Status.CLOSE
+                print("Depth of the middle point",depth_middle)
+                break
+
+        if status_flag == Status.FAR:
+            siren_sound.play()
+            time.sleep(3)
+            pygame.mixer.music.set_volume(1.0)
+        elif status_flag == Status.CLOSE:
+            explosion_sound.play()
+            time.sleep(1)
+            pygame.mixer.music.set_volume(1.0)
+
+        status_flag = Status.NOK
+
+        if cv2.waitKey(10) == 27:
             break
-        
         ret, frame = cap.read()
+
+    pygame.quit()
+    cv2.destroyAllWindows()
+    cap.release()
